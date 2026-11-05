@@ -6,6 +6,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT_DIR / ".env")
 
 from app.api.routes.documents import router as documents_router
+from app.api.routes.auth import router as auth_router
 
 
 app = FastAPI(
@@ -15,6 +16,11 @@ app = FastAPI(
         "and Semantic Search"
     ),
     version="1.0.0",
+)
+
+app.include_router(
+    auth_router,
+    prefix="/api/v1",
 )
 
 app.include_router(

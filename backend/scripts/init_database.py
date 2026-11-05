@@ -55,6 +55,20 @@ def initialize_database():
                         DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(document_id, chunk_index)
                 );
+
+                CREATE TABLE IF NOT EXISTS users (
+                    id BIGSERIAL PRIMARY KEY,
+                    email TEXT NOT NULL UNIQUE,
+                    hashed_password TEXT NOT NULL,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+                );
+
+                ALTER TABLE documents
+                ADD COLUMN IF NOT EXISTS user_id BIGINT
+                REFERENCES users(id)
+                ON DELETE SET NULL;
+
             """)
 
         conn.commit()
