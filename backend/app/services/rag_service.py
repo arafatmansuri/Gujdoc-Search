@@ -1,4 +1,5 @@
 import os
+import re
 
 from app.core.database import get_connection
 from app.services.embedding_service import generate_embedding
@@ -181,6 +182,10 @@ def answer_question(
         chunks=chunks,
     )
 
+    cited_source_numbers = {
+        int(match)
+        for match in re.findall(r"\[Source\s+(\d+)\]", answer, flags=re.IGNORECASE)
+    }
     sources = [
         {
             "source_number": index,
@@ -190,6 +195,7 @@ def answer_question(
             "chunk_id": chunk["chunk_id"],
         }
         for index, chunk in enumerate(chunks, start=1)
+        if index in cited_source_numbers
     ]
 
     return {

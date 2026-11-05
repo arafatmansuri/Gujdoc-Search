@@ -33,6 +33,11 @@ class RefreshRequest(BaseModel):
     refresh_token: str = Field(min_length=20, max_length=200)
 
 
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 @router.post("/register", status_code=201)
 def register_user(request: RegisterRequest):
     """Register a new user."""
@@ -195,3 +200,33 @@ def get_me(
     current_user: dict = Depends(get_current_user),
 ):
     return current_user
+
+
+@router.post("/change-password")
+def change_password(
+    request: ChangePasswordRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT hashed_password FROM users WHERE id = %s AND is_active = TRUE",
+            (current_user["id"],),
+        )
+        user = cur.fetchone()
+
+        if user is None or not verify_password(request.current_password, user[0]):
+            raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+        if request.current_password == request.new_password:
+            raise HTTPException(
+                status_code=400,
+                detail="New password must be different from the current password",
+            )
+
+        cur.execute(
+            "UPDATE users SET hashed_password = %s WHERE id = %s",
+            (hash_password(request.new_password), current_user["id"]),
+        )
+        conn.commit()
+
+    return {"message": "Password changed successfully"}
