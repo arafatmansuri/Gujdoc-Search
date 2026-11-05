@@ -8,12 +8,16 @@ from fastapi import (
     UploadFile,
     File,
     HTTPException,
+    Depends,
+    Query,
 )
 from pydantic import BaseModel, Field
 
 from azure.storage.blob import BlobServiceClient
 
 from app.core.database import get_connection
+from app.core.config import settings
+from app.api.dependencies import get_current_user
 from app.services.search_service import (
     save_document,
     search_documents,
@@ -21,6 +25,12 @@ from app.services.search_service import (
 from app.services.embedding_service import (
     generate_embedding,
 )
+from app.services.document_service import (
+    list_documents,
+    get_document,
+    delete_document_record,
+)
+from app.services.rag_service import answer_question
 from app.workers.tasks import process_document
 
 
@@ -73,13 +83,9 @@ async def upload_document(
             detail="File exceeds maximum upload size",
         )
 
-    connection_string = os.getenv(
-        "AZURE_STORAGE_CONNECTION_STRING"
-    )
+    connection_string = settings["AZURE_STORAGE_CONNECTION_STRING"]
 
-    container_name = os.getenv(
-        "AZURE_STORAGE_CONTAINER"
-    )
+    container_name = settings["AZURE_STORAGE_CONTAINER"]
 
     if not connection_string or not container_name:
         raise HTTPException(
@@ -170,6 +176,7 @@ async def upload_document(
 @router.get("/{document_id}/status")
 def get_document_status(
     document_id: int,
+    current_user: dict = Depends(get_current_user)
 ):
     """Retrieve document processing status."""
 
@@ -225,6 +232,7 @@ class SearchRequest(BaseModel):
 @router.post("/search")
 def semantic_search(
     request: SearchRequest,
+    current_user: dict = Depends(get_current_user),
 ):
     """Search document chunks using Gemini embeddings."""
 
@@ -241,6 +249,7 @@ def semantic_search(
 
         results = search_documents(
             query_embedding=query_embedding,
+            user_id=current_user["id"],
             limit=request.limit,
         )
 
@@ -254,4 +263,146 @@ def semantic_search(
         raise HTTPException(
             status_code=500,
             detail="Semantic search failed",
+        ) from exc
+
+@router.get("")
+def get_documents(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    current_user: dict = Depends(get_current_user),
+):
+    return list_documents(
+        user_id=current_user["id"],
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/{document_id}")
+def get_document_details(
+    document_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    document = get_document(
+        document_id=document_id,
+        user_id=current_user["id"],
+    )
+
+    if not document:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    # Avoid exposing the internal Azure blob name.
+    document.pop("blob_name", None)
+
+    return document
+
+
+@router.delete("/{document_id}")
+def delete_user_document(
+    document_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    document = get_document(
+        document_id=document_id,
+        user_id=current_user["id"],
+    )
+
+    if not document:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    blob_name = document["blob_name"]
+
+    # Delete the Azure blob first.
+    blob_service = BlobServiceClient.from_connection_string(
+        settings.AZURE_STORAGE_CONNECTION_STRING
+    )
+
+    blob_client = blob_service.get_blob_client(
+        container=settings.AZURE_STORAGE_CONTAINER,
+        blob=blob_name,
+    )
+
+    blob_client.delete_blob(
+        delete_snapshots="include",
+    )
+
+    # Delete database records only after blob deletion succeeds.
+    delete_document_record(
+        document_id=document_id,
+        user_id=current_user["id"],
+    )
+
+    return {
+        "message": "Document deleted successfully.",
+        "document_id": document_id,
+    }
+
+
+@router.post("/{document_id}/retry")
+def retry_document_processing(
+    document_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    document = get_document(
+        document_id=document_id,
+        user_id=current_user["id"],
+    )
+
+    if not document:
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found.",
+        )
+
+    if document["status"] != "failed":
+        raise HTTPException(
+            status_code=400,
+            detail="Only failed documents can be retried.",
+        )
+
+    process_document.delay(
+        document_id,
+        document["blob_name"],
+    )
+
+    return {
+        "message": "Document processing has been queued.",
+        "document_id": document_id,
+        "status": "queued",
+    }
+
+class AskRequest(BaseModel):
+    question: str = Field(
+        min_length=2,
+        max_length=2000,
+    )
+    limit: int = Field(
+        default=5,
+        ge=1,
+        le=10,
+    )
+
+
+@router.post("/ask")
+def ask_documents(
+    request: AskRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    try:
+        return answer_question(
+            question=request.question,
+            user_id=current_user["id"],
+            limit=request.limit,
+        )
+    except Exception as exc:
+        # Replace with your project's logger/error handler as it is added.
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to answer the question.",
         ) from exc

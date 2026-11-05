@@ -2,19 +2,24 @@ from app.core.database import get_connection
 
 def save_document(
     filename: str,
-    blob_name: str | None = None,
+    blob_name: str | None,
+    user_id: int,
 ) -> int:
-    """Create a document record and return its ID."""
+    """Create a document record owned by a user."""
 
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO documents (filename, blob_name)
-                VALUES (%s, %s)
+                INSERT INTO documents (
+                    filename,
+                    blob_name,
+                    user_id
+                )
+                VALUES (%s, %s, %s)
                 RETURNING id
                 """,
-                (filename, blob_name),
+                (filename, blob_name, user_id),
             )
 
             document_id = cur.fetchone()[0]
@@ -83,9 +88,10 @@ def update_document_status(
 
 def search_documents(
     query_embedding: list[float],
+    user_id: int,
     limit: int = 5,
 ) -> list[dict]:
-    """Search document chunks by vector similarity."""
+    """Search only documents belonging to the user."""
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -101,12 +107,16 @@ def search_documents(
                 FROM document_chunks c
                 JOIN documents d
                     ON d.id = c.document_id
-                WHERE c.embedding IS NOT NULL
+                WHERE
+                    c.embedding IS NOT NULL
+                    AND d.user_id = %s
+                    AND d.status = 'completed'
                 ORDER BY c.embedding <=> %s::vector
                 LIMIT %s
                 """,
                 (
                     query_embedding,
+                    user_id,
                     query_embedding,
                     limit,
                 ),
