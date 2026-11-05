@@ -18,9 +18,7 @@ MODEL = os.getenv(
     "gemini-embedding-001",
 )
 
-DIMENSIONS = int(
-    os.getenv("EMBEDDING_DIMENSIONS", "3072")
-)
+DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", "3072"))
 
 client: genai.Client | None = None
 
@@ -54,10 +52,7 @@ def generate_embedding(text: str) -> list[float]:
     embedding = response.embeddings[0].values
 
     if len(embedding) != DIMENSIONS:
-        raise ValueError(
-            f"Expected {DIMENSIONS} dimensions, "
-            f"received {len(embedding)}"
-        )
+        raise ValueError(f"Expected {DIMENSIONS} dimensions, received {len(embedding)}")
 
     return embedding
 
@@ -67,7 +62,4 @@ def generate_embeddings(
 ) -> list[list[float]]:
     """Generate embeddings for multiple chunks."""
 
-    return [
-        generate_embedding(text)
-        for text in texts
-    ]
+    return [generate_embedding(text) for text in texts]

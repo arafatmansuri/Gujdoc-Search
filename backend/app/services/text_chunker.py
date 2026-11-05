@@ -1,5 +1,6 @@
 import os
 
+
 def chunk_text(
     text: str,
     chunk_size: int | None = None,
@@ -13,21 +14,15 @@ def chunk_text(
         chunk_overlap = 150
     """
 
-    chunk_size = chunk_size or int(
-        os.getenv("CHUNK_SIZE", "1000")
-    )
+    chunk_size = chunk_size or int(os.getenv("CHUNK_SIZE", "1000"))
 
-    chunk_overlap = chunk_overlap or int(
-        os.getenv("CHUNK_OVERLAP", "150")
-    )
+    chunk_overlap = chunk_overlap or int(os.getenv("CHUNK_OVERLAP", "150"))
 
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
 
     if chunk_overlap < 0 or chunk_overlap >= chunk_size:
-        raise ValueError(
-            "chunk_overlap must be >= 0 and < chunk_size"
-        )
+        raise ValueError("chunk_overlap must be >= 0 and < chunk_size")
 
     text = " ".join(text.split())
 

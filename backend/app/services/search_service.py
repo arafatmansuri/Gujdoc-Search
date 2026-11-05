@@ -1,26 +1,38 @@
 from app.core.database import get_connection
+from psycopg.errors import UniqueViolation
+
+
+class DuplicateDocumentError(Exception):
+    """Raised when a user uploads the same content more than once."""
+
 
 def save_document(
     filename: str,
     blob_name: str | None,
     user_id: int,
+    content_hash: str,
 ) -> int:
     """Create a document record owned by a user."""
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
+            try:
+                cur.execute(
+                    """
                 INSERT INTO documents (
                     filename,
                     blob_name,
-                    user_id
+                    user_id,
+                    content_hash
                 )
-                VALUES (%s, %s, %s)
+                VALUES (%s, %s, %s, %s)
                 RETURNING id
                 """,
-                (filename, blob_name, user_id),
-            )
+                    (filename, blob_name, user_id, content_hash),
+                )
+            except UniqueViolation as exc:
+                conn.rollback()
+                raise DuplicateDocumentError from exc
 
             document_id = cur.fetchone()[0]
 
@@ -37,7 +49,6 @@ def save_chunks(
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-
             for chunk in chunks:
                 cur.execute(
                     """
@@ -79,10 +90,34 @@ def update_document_status(
                 UPDATE documents
                 SET status = %s
                 WHERE id = %s
+                  AND status <> 'deleted'
                 """,
                 (status, document_id),
             )
 
+        conn.commit()
+
+
+def get_document_for_processing(document_id: int, blob_name: str) -> dict | None:
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+                SELECT id, blob_name, status
+                FROM documents
+                WHERE id = %s AND blob_name = %s AND status <> 'deleted'
+                """,
+            (document_id, blob_name),
+        )
+        row = cur.fetchone()
+    return {"id": row[0], "blob_name": row[1], "status": row[2]} if row else None
+
+
+def clear_chunks(document_id: int) -> None:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM document_chunks WHERE document_id = %s", (document_id,)
+            )
         conn.commit()
 
 
@@ -93,10 +128,9 @@ def search_documents(
 ) -> list[dict]:
     """Search only documents belonging to the user."""
 
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT
                     d.filename,
                     c.document_id,
@@ -114,15 +148,15 @@ def search_documents(
                 ORDER BY c.embedding <=> %s::vector
                 LIMIT %s
                 """,
-                (
-                    query_embedding,
-                    user_id,
-                    query_embedding,
-                    limit,
-                ),
-            )
+            (
+                query_embedding,
+                user_id,
+                query_embedding,
+                limit,
+            ),
+        )
 
-            rows = cur.fetchall()
+        rows = cur.fetchall()
 
     return [
         {

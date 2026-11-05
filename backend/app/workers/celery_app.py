@@ -12,10 +12,20 @@ REDIS_URL = os.getenv("REDIS_URL")
 if not REDIS_URL:
     raise ValueError("REDIS_URL is missing")
 
+broker_url = os.getenv("CELERY_BROKER_URL") or REDIS_URL
+result_backend = os.getenv("CELERY_RESULT_BACKEND") or REDIS_URL
+
+# Docker env files do not expand shell-style references such as
+# CELERY_BROKER_URL=${REDIS_URL}.
+if broker_url == "${REDIS_URL}":
+    broker_url = REDIS_URL
+if result_backend == "${REDIS_URL}":
+    result_backend = REDIS_URL
+
 celery_app = Celery(
     "gujdoc",
-    broker=os.getenv("CELERY_BROKER_URL", REDIS_URL),
-    backend=os.getenv("CELERY_RESULT_BACKEND", REDIS_URL),
+    broker=broker_url,
+    backend=result_backend,
     include=["app.workers.tasks"],
 )
 

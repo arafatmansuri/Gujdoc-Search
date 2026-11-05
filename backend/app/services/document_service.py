@@ -6,10 +6,9 @@ def list_documents(
     limit: int = 20,
     offset: int = 0,
 ) -> dict:
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT
                     id,
                     filename,
@@ -20,21 +19,21 @@ def list_documents(
                 ORDER BY created_at DESC
                 LIMIT %s OFFSET %s
                 """,
-                (user_id, limit, offset),
-            )
+            (user_id, limit, offset),
+        )
 
-            rows = cur.fetchall()
+        rows = cur.fetchall()
 
-            cur.execute(
-                """
+        cur.execute(
+            """
                 SELECT COUNT(*)
                 FROM documents
                 WHERE user_id = %s
                 """,
-                (user_id,),
-            )
+            (user_id,),
+        )
 
-            total = cur.fetchone()[0]
+        total = cur.fetchone()[0]
 
     return {
         "items": [
@@ -56,10 +55,9 @@ def get_document(
     document_id: int,
     user_id: int,
 ) -> dict | None:
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
                 SELECT
                     id,
                     filename,
@@ -69,11 +67,12 @@ def get_document(
                 FROM documents
                 WHERE id = %s
                   AND user_id = %s
+                  AND status <> 'deleted'
                 """,
-                (document_id, user_id),
-            )
+            (document_id, user_id),
+        )
 
-            row = cur.fetchone()
+        row = cur.fetchone()
 
     if not row:
         return None
@@ -131,5 +130,6 @@ def delete_document_record(
                 """,
                 (document_id, user_id),
             )
+        conn.commit()
 
     return blob_name

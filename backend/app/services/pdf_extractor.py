@@ -39,15 +39,12 @@ def extract_pdf_text(
     extracted_pages = []
 
     with pymupdf.open(pdf_path) as document:
-
         for page_index, page in enumerate(document):
-
             # Attempt direct text extraction
             text = page.get_text("text").strip()
 
             # Use OCR if the page has little or no text
             if len(text) < 30:
-
                 pix = page.get_pixmap(
                     matrix=pymupdf.Matrix(300 / 72, 300 / 72),
                     alpha=False,

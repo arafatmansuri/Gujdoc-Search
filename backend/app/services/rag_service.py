@@ -1,10 +1,10 @@
+import os
+
+from app.core.database import get_connection
+from app.services.embedding_service import generate_embedding
+from dotenv import load_dotenv
 from google import genai
 from google.genai import types
-import os
-from dotenv import load_dotenv
-
-from app.services.embedding_service import generate_embedding
-from app.core.database import get_connection
 
 load_dotenv(
     os.path.join(
@@ -23,17 +23,46 @@ def retrieve_relevant_chunks(
     question: str,
     user_id: int,
     limit: int = 5,
+    document_id: int | None = None,
 ) -> list[dict]:
     """
     Retrieve relevant chunks only from documents owned by the user.
     """
+    
 
     query_embedding = generate_embedding(question)
+    
 
-    with get_connection() as conn:
-        with conn.cursor() as cur:
+    with get_connection() as conn, conn.cursor() as cur:
+        if document_id is not None:
             cur.execute(
                 """
+                SELECT
+                    dc.id AS chunk_id,
+                    dc.content,
+                    dc.page_number,
+                    d.id AS document_id,
+                    d.filename,
+                    (dc.embedding <=> %s::vector) AS distance
+                FROM document_chunks dc
+                JOIN documents d ON d.id = dc.document_id
+                WHERE d.user_id = %s
+                  AND d.status = 'completed'
+                  AND d.id = %s
+                ORDER BY dc.embedding <=> %s::vector
+                LIMIT %s
+                """,
+                (
+                    query_embedding,
+                    user_id,
+                    document_id,
+                    query_embedding,
+                    limit,
+                ),
+            )
+        else:
+            cur.execute(
+            """
                 SELECT
                     dc.id AS chunk_id,
                     dc.content,
@@ -48,16 +77,16 @@ def retrieve_relevant_chunks(
                 ORDER BY dc.embedding <=> %s::vector
                 LIMIT %s
                 """,
-                (
-                    query_embedding,
-                    user_id,
-                    query_embedding,
-                    limit,
-                ),
-            )
+            (
+                query_embedding,
+                user_id,
+                query_embedding,
+                limit,
+            ),
+        )
 
-            rows = cur.fetchall()
-
+        rows = cur.fetchall()
+    
     return [
         {
             "chunk_id": row[0],
@@ -78,9 +107,10 @@ def generate_grounded_answer(
     """
     Generate an answer using only the retrieved document context.
     """
-
+    
     if not chunks:
         return "I couldn't find an answer in your uploaded documents."
+    
 
     context_parts = []
 
@@ -119,7 +149,7 @@ USER QUESTION:
 
 ANSWER:
 """
-
+    
     response = client.models.generate_content(
         model=os.getenv("GEMINI_GENERATION_MODEL"),
         contents=prompt,
@@ -127,7 +157,7 @@ ANSWER:
             temperature=0.2,
         ),
     )
-
+    
     return response.text or (
         "I couldn't generate an answer from the retrieved documents."
     )
@@ -137,11 +167,13 @@ def answer_question(
     question: str,
     user_id: int,
     limit: int = 5,
+    document_id: int | None = None,
 ) -> dict:
     chunks = retrieve_relevant_chunks(
         question=question,
         user_id=user_id,
         limit=limit,
+        document_id=document_id,
     )
 
     answer = generate_grounded_answer(

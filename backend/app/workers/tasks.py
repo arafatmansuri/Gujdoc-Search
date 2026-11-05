@@ -2,16 +2,17 @@ import logging
 import os
 import tempfile
 
-from azure.storage.blob import BlobServiceClient
-
 from app.services.embedding_service import generate_embedding
 from app.services.pdf_extractor import extract_pdf_text
 from app.services.search_service import (
+    clear_chunks,
+    get_document_for_processing,
     save_chunks,
     update_document_status,
 )
 from app.services.text_chunker import chunk_text
 from app.workers.celery_app import celery_app
+from azure.storage.blob import BlobServiceClient
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
     bind=True,
     name="process_document",
     max_retries=3,
+    default_retry_delay=30,
 )
 def process_document(
     self,
@@ -31,34 +33,30 @@ def process_document(
     """
 
     try:
+        document = get_document_for_processing(document_id, blob_name)
+        if document is None:
+            logger.warning(
+                "Skipping stale document task",
+                extra={"document_id": document_id},
+            )
+            return {"document_id": document_id, "status": "stale"}
+
         update_document_status(
             document_id,
             "processing",
         )
 
-        connection_string = os.getenv(
-            "AZURE_STORAGE_CONNECTION_STRING"
-        )
+        connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
 
-        container_name = os.getenv(
-            "AZURE_STORAGE_CONTAINER"
-        )
+        container_name = os.getenv("AZURE_STORAGE_CONTAINER")
 
         if not connection_string or not container_name:
-            raise ValueError(
-                "Azure configuration is missing"
-            )
+            raise ValueError("Azure configuration is missing")
 
-        blob_service = (
-            BlobServiceClient.from_connection_string(
-                connection_string
-            )
-        )
+        blob_service = BlobServiceClient.from_connection_string(connection_string)
 
-        blob_client = (
-            blob_service
-            .get_container_client(container_name)
-            .get_blob_client(blob_name)
+        blob_client = blob_service.get_container_client(container_name).get_blob_client(
+            blob_name
         )
 
         with tempfile.NamedTemporaryFile(
@@ -81,22 +79,14 @@ def process_document(
 
             # Process each page
             for page in pages:
-
-                page_chunks = chunk_text(
-                    page["text"]
-                )
+                page_chunks = chunk_text(page["text"])
 
                 for content in page_chunks:
-
-                    embedding = generate_embedding(
-                        content
-                    )
+                    embedding = generate_embedding(content)
 
                     chunks_to_save.append(
                         {
-                            "page_number": page[
-                                "page_number"
-                            ],
+                            "page_number": page["page_number"],
                             "chunk_index": chunk_index,
                             "content": content,
                             "embedding": embedding,
@@ -105,7 +95,8 @@ def process_document(
 
                     chunk_index += 1
 
-            # Store chunks and embeddings
+            # Rebuild chunks so retries cannot leave stale embeddings behind.
+            clear_chunks(document_id)
             save_chunks(
                 document_id,
                 chunks_to_save,
@@ -144,7 +135,7 @@ def process_document(
             )
             raise self.retry(
                 exc=exc,
-                countdown=30,
+                countdown=min(300, 30 * (2**self.request.retries)),
             )
 
         try:

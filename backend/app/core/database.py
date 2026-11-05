@@ -3,7 +3,6 @@ import os
 import psycopg
 from pgvector.psycopg import register_vector
 
-
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
@@ -24,7 +23,6 @@ def initialize_database():
 
     with get_connection() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 CREATE EXTENSION IF NOT EXISTS vector;
 
@@ -32,6 +30,7 @@ def initialize_database():
                     id BIGSERIAL PRIMARY KEY,
                     filename TEXT NOT NULL,
                     blob_name TEXT,
+                    content_hash CHAR(64),
                     status TEXT NOT NULL DEFAULT 'pending',
                     created_at TIMESTAMPTZ
                         DEFAULT CURRENT_TIMESTAMP
@@ -63,6 +62,24 @@ def initialize_database():
                 ADD COLUMN IF NOT EXISTS user_id BIGINT
                 REFERENCES users(id)
                 ON DELETE SET NULL;
+
+                CREATE UNIQUE INDEX IF NOT EXISTS
+                documents_user_content_hash_idx
+                ON documents(user_id, content_hash)
+                WHERE content_hash IS NOT NULL AND user_id IS NOT NULL;
+
+                CREATE TABLE IF NOT EXISTS refresh_tokens (
+                    id UUID PRIMARY KEY,
+                    user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    token_hash CHAR(64) NOT NULL UNIQUE,
+                    expires_at TIMESTAMPTZ NOT NULL,
+                    revoked_at TIMESTAMPTZ,
+                    replaced_by UUID,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE INDEX IF NOT EXISTS refresh_tokens_user_idx
+                ON refresh_tokens(user_id);
 
             """)
 
