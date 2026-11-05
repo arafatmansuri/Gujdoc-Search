@@ -2,28 +2,10 @@ import hashlib
 import logging
 import re
 import uuid
+from io import BytesIO
 from pathlib import Path
 
 import pymupdf
-from app.api.dependencies import get_current_user
-from app.core.config import settings
-from app.core.database import get_connection
-from app.core.rate_limit import enforce_rate_limit
-from app.services.document_service import (
-    delete_document_record,
-    get_document,
-    list_documents,
-)
-from app.services.embedding_service import (
-    generate_embedding,
-)
-from app.services.rag_service import answer_question
-from app.services.search_service import (
-    DuplicateDocumentError,
-    save_document,
-    search_documents,
-)
-from app.workers.tasks import process_document
 from azure.storage.blob import BlobServiceClient
 from fastapi import (
     APIRouter,
@@ -34,7 +16,42 @@ from fastapi import (
     Request,
     UploadFile,
 )
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+
+from app.api.dependencies import get_current_user
+from app.core.config import settings
+from app.core.database import get_connection
+from app.core.rate_limit import enforce_rate_limit
+from app.services.document_service import (
+    delete_document_record,
+    get_processing_metrics,
+    get_document,
+    list_documents,
+)
+from app.services.embedding_service import (
+    generate_embedding,
+)
+from app.services.metadata_review_service import (
+    get_document_audit_events,
+    save_metadata_correction,
+    save_region_correction,
+)
+from app.services.evaluation_service import get_evaluation_metrics, save_evaluation_case
+from app.services.search_evaluation_service import (
+    create_search_case,
+    get_search_metrics,
+    record_search_result,
+)
+from app.services.rag_service import answer_question
+from app.services.search_service import (
+    DuplicateDocumentError,
+    get_document_regions,
+    save_document,
+    search_documents,
+    search_record_metadata,
+)
+from app.workers.tasks import process_document
 
 router = APIRouter(
     prefix="/documents",
@@ -215,7 +232,20 @@ def get_document_status(
                     id,
                     filename,
                     status,
-                    created_at
+                    created_at,
+                    document_number,
+                    document_date,
+                    subject,
+                    issuing_office,
+                    referenced_documents,
+                    metadata_confidence,
+                    metadata_status
+                    ,ocr_confidence
+                    ,uncertain_regions
+                    ,layout_features
+                    ,processing_started_at
+                    ,processing_completed_at
+                    ,processing_error
                 FROM documents
                 WHERE id = %s
                   AND user_id = %s
@@ -236,6 +266,19 @@ def get_document_status(
         "filename": row[1],
         "status": row[2],
         "created_at": row[3],
+        "document_number": row[4],
+        "document_date": row[5],
+        "subject": row[6],
+        "issuing_office": row[7],
+        "referenced_documents": row[8],
+        "metadata_confidence": float(row[9]) if row[9] is not None else None,
+        "metadata_status": row[10],
+        "ocr_confidence": float(row[11]) if row[11] is not None else None,
+        "uncertain_regions": row[12],
+        "layout_features": row[13] or {},
+        "processing_started_at": row[14],
+        "processing_completed_at": row[15],
+        "processing_error": row[16],
     }
 
 
@@ -249,12 +292,234 @@ class SearchRequest(BaseModel):
         min_length=1,
         max_length=2000,
     )
+    limit: int = Field(default=5, ge=1, le=20)
 
-    limit: int = Field(
-        default=5,
-        ge=1,
-        le=20,
+
+class RecordSearchRequest(BaseModel):
+    query: str = Field(default="", max_length=2000)
+    document_number: str | None = Field(default=None, max_length=255)
+    issuing_office: str | None = Field(default=None, max_length=1000)
+    date_from: str | None = Field(default=None, max_length=10)
+    date_to: str | None = Field(default=None, max_length=10)
+    limit: int = Field(default=20, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
+class MetadataCorrectionRequest(BaseModel):
+    document_number: str | None = Field(default=None, max_length=255)
+    document_date: str | None = Field(default=None, max_length=10)
+    subject: str | None = Field(default=None, max_length=2000)
+    issuing_office: str | None = Field(default=None, max_length=1000)
+    referenced_documents: list[str] = Field(default_factory=list, max_length=100)
+
+
+class RegionCorrectionRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+class EvaluationCaseRequest(BaseModel):
+    page_number: int = Field(ge=1)
+    expected_text: str = Field(min_length=1, max_length=200000)
+    expected_document_number: str | None = Field(default=None, max_length=255)
+    expected_date: str | None = Field(default=None, max_length=10)
+    expected_subject: str | None = Field(default=None, max_length=2000)
+    expected_issuing_office: str | None = Field(default=None, max_length=1000)
+    expected_region: dict[str, float] | None = None
+
+
+class SearchEvaluationRequest(BaseModel):
+    query: str = Field(min_length=1, max_length=2000)
+    expected_document_ids: list[int] = Field(min_length=1, max_length=50)
+
+
+class SearchEvaluationRunRequest(BaseModel):
+    case_id: int
+
+
+@router.patch("/{document_id}/metadata")
+def correct_document_metadata(
+    document_id: int,
+    request: MetadataCorrectionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user["role"] not in {"reviewer", "admin"}:
+        raise HTTPException(status_code=403, detail="Reviewer access is required")
+    try:
+        save_metadata_correction(
+            document_id=document_id,
+            user_id=current_user["id"],
+            metadata=request.model_dump(),
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "document_id": document_id,
+        "metadata_status": "verified",
+        "message": "Metadata correction saved.",
+    }
+
+
+@router.patch("/regions/{region_id}")
+def correct_ocr_region(
+    region_id: int,
+    request: RegionCorrectionRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user["role"] not in {"reviewer", "admin"}:
+        raise HTTPException(status_code=403, detail="Reviewer access is required")
+    try:
+        return save_region_correction(region_id, current_user["id"], request.text.strip())
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/records/search")
+def search_records(
+    request: RecordSearchRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    return search_record_metadata(
+        user_id=current_user["id"],
+        query=request.query.strip(),
+        document_number=request.document_number,
+        issuing_office=request.issuing_office,
+        date_from=request.date_from,
+        date_to=request.date_to,
+        limit=request.limit,
+        offset=request.offset,
     )
+
+
+@router.get("/{document_id}/regions")
+def document_regions(
+    document_id: int,
+    page_number: int | None = Query(default=None, ge=1),
+    current_user: dict = Depends(get_current_user),
+):
+    regions = get_document_regions(document_id, current_user["id"], page_number)
+    if regions is None:
+        raise HTTPException(status_code=404, detail="Document regions not found")
+    return {"document_id": document_id, "regions": regions}
+
+
+@router.get("/{document_id}/audit")
+def document_audit(
+    document_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    events = get_document_audit_events(document_id, current_user["id"])
+    if events is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {"document_id": document_id, "events": events}
+
+
+@router.post("/{document_id}/evaluation")
+def add_evaluation_case(
+    document_id: int,
+    request: EvaluationCaseRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user["role"] not in {"reviewer", "admin"}:
+        raise HTTPException(status_code=403, detail="Reviewer access is required")
+    try:
+        return save_evaluation_case(current_user["id"], document_id, request.model_dump())
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/evaluation/search-case")
+def add_search_evaluation_case(
+    request: SearchEvaluationRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    if current_user["role"] not in {"reviewer", "admin"}:
+        raise HTTPException(status_code=403, detail="Reviewer access is required")
+    return create_search_case(
+        current_user["id"],
+        request.query,
+        request.expected_document_ids,
+    )
+
+
+@router.post("/evaluation/search-run")
+def run_search_evaluation(
+    request: SearchEvaluationRunRequest,
+    http_request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT query, expected_document_ids
+            FROM search_evaluation_cases
+            WHERE id = %s AND user_id = %s
+            """,
+            (request.case_id, current_user["id"]),
+        )
+        case = cur.fetchone()
+    if case is None:
+        raise HTTPException(status_code=404, detail="Search evaluation case not found")
+    enforce_rate_limit(http_request, "search", settings["RATE_LIMIT_EXPENSIVE"], str(current_user["id"]))
+    results = search_documents(
+        generate_embedding(case[0]),
+        current_user["id"],
+        limit=10,
+    )
+    expected = set(case[1] or [])
+    success = any(result["document_id"] in expected for result in results)
+    record_search_result(request.case_id, current_user["id"], success)
+    return {"case_id": request.case_id, "success": success, "result_count": len(results)}
+
+
+@router.get("/{document_id}/searchable-pdf")
+def download_searchable_pdf(
+    document_id: int,
+    current_user: dict = Depends(get_current_user),
+):
+    document = get_document(document_id, current_user["id"])
+    if not document or not document.get("searchable_blob_name"):
+        raise HTTPException(status_code=404, detail="Searchable PDF is not ready")
+    blob = BlobServiceClient.from_connection_string(
+        settings["AZURE_STORAGE_CONNECTION_STRING"]
+    ).get_blob_client(
+        container=settings["AZURE_STORAGE_CONTAINER"],
+        blob=document["searchable_blob_name"],
+    ).download_blob().readall()
+    return StreamingResponse(
+        BytesIO(blob),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{document["filename"]}"'
+        },
+    )
+
+
+@router.get("/{document_id}/preview")
+def preview_document_page(
+    document_id: int,
+    page_number: int = Query(default=1, ge=1),
+    current_user: dict = Depends(get_current_user),
+):
+    document = get_document(document_id, current_user["id"])
+    if not document or not document.get("blob_name"):
+        raise HTTPException(status_code=404, detail="Document not found")
+    blob = BlobServiceClient.from_connection_string(
+        settings["AZURE_STORAGE_CONNECTION_STRING"]
+    ).get_blob_client(
+        container=settings["AZURE_STORAGE_CONTAINER"],
+        blob=document["blob_name"],
+    ).download_blob().readall()
+    try:
+        with pymupdf.open(stream=blob, filetype="pdf") as pdf:
+            if page_number > pdf.page_count:
+                raise HTTPException(status_code=404, detail="Page not found")
+            pixmap = pdf[page_number - 1].get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5), alpha=False)
+            image = pixmap.tobytes("png")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail="Could not render document page") from exc
+    return StreamingResponse(BytesIO(image), media_type="image/png")
 
 
 @router.post("/search")
@@ -301,6 +566,14 @@ def semantic_search(
         ) from exc
 
 
+@router.get("/evaluation/metrics")
+def evaluation_metrics(current_user: dict = Depends(get_current_user)):
+    return {
+        **get_evaluation_metrics(current_user["id"]),
+        **get_search_metrics(current_user["id"]),
+    }
+
+
 @router.get("")
 def get_documents(
     limit: int = Query(default=20, ge=1, le=100),
@@ -312,6 +585,11 @@ def get_documents(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/metrics/summary")
+def get_metrics_summary(current_user: dict = Depends(get_current_user)):
+    return get_processing_metrics(current_user["id"])
 
 
 @router.get("/{document_id}")
@@ -332,6 +610,7 @@ def get_document_details(
 
     # Avoid exposing the internal Azure blob name.
     document.pop("blob_name", None)
+    document.pop("searchable_blob_name", None)
 
     return document
 
@@ -356,16 +635,23 @@ def delete_user_document(
 
     # Delete the Azure blob first.
     blob_service = BlobServiceClient.from_connection_string(
-        settings.AZURE_STORAGE_CONNECTION_STRING
+        settings["AZURE_STORAGE_CONNECTION_STRING"]
     )
 
     blob_client = blob_service.get_blob_client(
-        container=settings.AZURE_STORAGE_CONTAINER,
+        container=settings["AZURE_STORAGE_CONTAINER"],
         blob=blob_name,
     )
 
     try:
         blob_client.delete_blob(delete_snapshots="include")
+        if document.get("searchable_blob_name"):
+            BlobServiceClient.from_connection_string(
+                settings["AZURE_STORAGE_CONNECTION_STRING"]
+            ).get_blob_client(
+                container=settings["AZURE_STORAGE_CONTAINER"],
+                blob=document["searchable_blob_name"],
+            ).delete_blob(delete_snapshots="include")
     except Exception as exc:
         logger.exception(
             "Document blob deletion failed", extra={"document_id": document_id}

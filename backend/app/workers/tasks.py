@@ -1,18 +1,30 @@
 import logging
 import os
 import tempfile
+import uuid
 
+from azure.storage.blob import BlobServiceClient, ContentSettings
+
+from app.services.document_service import (
+    mark_processing_completed,
+    mark_processing_error,
+    mark_processing_started,
+    set_searchable_blob,
+    update_document_metadata,
+    update_ocr_quality,
+)
 from app.services.embedding_service import generate_embedding
-from app.services.pdf_extractor import extract_pdf_text
+from app.services.metadata_extractor import extract_metadata
+from app.services.pdf_extractor import create_searchable_pdf, extract_pdf_text
 from app.services.search_service import (
     clear_chunks,
     get_document_for_processing,
     save_chunks,
+    save_regions,
     update_document_status,
 )
 from app.services.text_chunker import chunk_text
 from app.workers.celery_app import celery_app
-from azure.storage.blob import BlobServiceClient
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +57,7 @@ def process_document(
             document_id,
             "processing",
         )
+        mark_processing_started(document_id)
 
         connection_string = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
 
@@ -73,6 +86,46 @@ def process_document(
 
             # Extract text
             pages = extract_pdf_text(pdf_path)
+            update_document_metadata(document_id, extract_metadata(pages))
+            quality_pages = [page for page in pages if page["ocr_confidence"] is not None]
+            update_ocr_quality(
+                document_id,
+                (
+                    sum(page["ocr_confidence"] for page in quality_pages)
+                    / len(quality_pages)
+                    if quality_pages
+                    else None
+                ),
+                sum(page["uncertain_regions"] for page in pages),
+                {
+                    **{
+                        feature: sum(
+                            page["layout_features"].get(feature, 0) for page in pages
+                        )
+                        for feature in ("tables", "stamp_like_regions")
+                    },
+                    "annotations": [
+                        {
+                            **annotation,
+                            "page_number": page["page_number"],
+                        }
+                        for page in pages
+                        for annotation in page["layout_features"].get("annotations", [])
+                    ],
+                },
+            )
+            searchable_path = f"{pdf_path}.searchable.pdf"
+            create_searchable_pdf(pdf_path, searchable_path, pages)
+            searchable_blob_name = f"searchable/{uuid.uuid4().hex}.pdf"
+            with open(searchable_path, "rb") as searchable_file:
+                blob_service.get_container_client(container_name).get_blob_client(
+                    searchable_blob_name
+                ).upload_blob(
+                    searchable_file,
+                    overwrite=False,
+                    content_settings=ContentSettings(content_type="application/pdf"),
+                )
+            set_searchable_blob(document_id, searchable_blob_name)
 
             chunks_to_save = []
             chunk_index = 0
@@ -97,6 +150,7 @@ def process_document(
 
             # Rebuild chunks so retries cannot leave stale embeddings behind.
             clear_chunks(document_id)
+            save_regions(document_id, pages)
             save_chunks(
                 document_id,
                 chunks_to_save,
@@ -106,6 +160,7 @@ def process_document(
                 document_id,
                 "completed",
             )
+            mark_processing_completed(document_id)
 
             return {
                 "document_id": document_id,
@@ -117,8 +172,15 @@ def process_document(
         finally:
             if os.path.exists(pdf_path):
                 os.remove(pdf_path)
+            searchable_path = f"{pdf_path}.searchable.pdf"
+            if os.path.exists(searchable_path):
+                os.remove(searchable_path)
 
     except Exception as exc:
+        try:
+            mark_processing_error(document_id, str(exc))
+        except Exception:
+            logger.exception("Could not save processing error", extra={"document_id": document_id})
         # Keep the document visible as processing while Celery retries. The
         # API uses this status for polling, so marking it failed here makes a
         # transient failure look permanent before the retry is attempted.

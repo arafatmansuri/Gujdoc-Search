@@ -1,10 +1,11 @@
 import os
 
 import jwt
-from app.core.database import get_connection
-from app.core.security import ALGORITHM, SECRET_KEY
 from fastapi import Depends, HTTPException
 from fastapi.security import OAuth2PasswordBearer
+
+from app.core.database import get_connection
+from app.core.security import ALGORITHM, SECRET_KEY
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
@@ -47,7 +48,7 @@ def get_current_user(
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute(
             """
-                SELECT id, email, is_active
+                SELECT id, email, is_active, role
                 FROM users
                 WHERE id = %s
                 """,
@@ -62,4 +63,5 @@ def get_current_user(
     return {
         "id": user[0],
         "email": user[1],
+        "role": user[3],
     }

@@ -4,14 +4,19 @@ import type { DocumentRecord } from "../api";
 import { api } from "../api";
 import { AskBox } from "../components/AskBox";
 import { DocumentList } from "../components/DocumentList";
+import { ProcessingSummary } from "../components/ProcessingSummary";
 
 export function HomePage() {
   const [documents, setDocuments] = useState<DocumentRecord[]>([]);
+  const [error, setError] = useState("");
   const refresh = () =>
     api
       .listDocuments()
-      .then(setDocuments)
-      .catch(() => undefined);
+      .then((items) => {
+        setDocuments(items);
+        setError("");
+      })
+      .catch(() => setError("Could not load your documents. Please try again."));
   useEffect(() => {
     void refresh();
     const handler = () => void refresh();
@@ -40,6 +45,8 @@ export function HomePage() {
           Refresh
         </button>
       </div>
+      {error && <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-xs text-red-700">{error}</p>}
+      <ProcessingSummary />
       <DocumentList documents={documents} />
       <AskBox documents={documents} />
     </div>
