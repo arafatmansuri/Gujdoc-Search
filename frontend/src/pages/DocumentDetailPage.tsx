@@ -2,8 +2,10 @@ import { ArrowLeft, CheckCircle2, ChevronLeft, ChevronRight, Download, FileText,
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api, getApiError, type DocumentRecord, type DocumentRegion } from '../api'
+import { invalidateDocuments, useAppDispatch } from '../store'
 
 export function DocumentDetailPage() {
+  const dispatch = useAppDispatch()
   const { id } = useParams()
   const documentId = Number(id)
   const [documentRecord, setDocumentRecord] = useState<DocumentRecord | null>(null)
@@ -59,7 +61,7 @@ export function DocumentDetailPage() {
     setDeleting(true)
     try {
       await api.deleteDocument(documentId)
-      window.dispatchEvent(new Event('documents-refresh'))
+      dispatch(invalidateDocuments())
       window.location.href = '/'
     } catch (reason) {
       setError(getApiError(reason, 'Could not delete this document.'))

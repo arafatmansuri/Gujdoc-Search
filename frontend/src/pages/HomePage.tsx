@@ -1,28 +1,20 @@
 import { RefreshCw } from "lucide-react";
-import { useEffect, useState } from "react";
-import type { DocumentRecord } from "../api";
-import { api } from "../api";
+import { useEffect } from "react";
 import { AskBox } from "../components/AskBox";
 import { DocumentList } from "../components/DocumentList";
 import { ProcessingSummary } from "../components/ProcessingSummary";
+import { fetchDocuments, invalidateDocuments, useAppDispatch, useAppSelector } from "../store";
 
 export function HomePage() {
-  const [documents, setDocuments] = useState<DocumentRecord[]>([]);
-  const [error, setError] = useState("");
-  const refresh = () =>
-    api
-      .listDocuments()
-      .then((items) => {
-        setDocuments(items);
-        setError("");
-      })
-      .catch(() => setError("Could not load your documents. Please try again."));
+  const dispatch = useAppDispatch();
+  const { items: documents, error, invalidated } = useAppSelector((state) => state.documents);
   useEffect(() => {
-    void refresh();
-    const handler = () => void refresh();
-    window.addEventListener("documents-refresh", handler);
-    return () => window.removeEventListener("documents-refresh", handler);
-  }, []);
+    void dispatch(fetchDocuments());
+  }, [dispatch, invalidated]);
+  const refresh = () => {
+    dispatch(invalidateDocuments());
+    void dispatch(fetchDocuments());
+  };
   return (
     <div className="space-y-10">
       <div className="flex items-end justify-between">

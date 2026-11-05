@@ -4,8 +4,10 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { ProfileMenu } from './ProfileMenu'
 import { Logo } from './Logo'
 import { UploadModal } from './UploadModal'
+import { invalidateDocuments, useAppDispatch } from '../store'
 
 export function AppLayout({ email, role, onLogout }: { email: string; role: 'reviewer' | 'admin'; onLogout: () => void }) {
+  const dispatch = useAppDispatch()
   const [menu, setMenu] = useState(false)
   const [upload, setUpload] = useState(false)
   const location = useLocation()
@@ -23,6 +25,6 @@ export function AppLayout({ email, role, onLogout }: { email: string; role: 'rev
       <div className="absolute bottom-6 left-6 right-6 border-t border-white/10 pt-4 text-xs text-slate-400">Private document intelligence</div>
     </aside>
     <div className="lg:pl-64"><header className="flex h-20 items-center justify-between border-b border-slate-200 bg-[#f7f5ef]/90 px-5 backdrop-blur lg:px-10"><button className="lg:hidden" onClick={() => setMenu(true)}><Menu size={21} /></button><div className="hidden text-sm font-medium text-slate-500 lg:block">{location.pathname === '/profile' ? 'Profile settings' : 'Your research desk'}</div><div className="ml-auto"><ProfileMenu email={email} onLogout={onLogout} /></div></header><main className="mx-auto max-w-6xl px-5 py-8 lg:px-10"><Outlet /></main></div>
-    {upload && <UploadModal onClose={() => setUpload(false)} onUploaded={() => window.dispatchEvent(new Event('documents-refresh'))} />}
+    {upload && <UploadModal onClose={() => setUpload(false)} onUploaded={() => dispatch(invalidateDocuments())} />}
   </div>
 }
