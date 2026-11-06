@@ -38,7 +38,7 @@ export function AuthForm({
     }
   }
   return (
-    <main className="grid min-h-screen place-items-center bg-[#17233b] p-5">
+    <main className="flex min-h-screen flex-col items-center justify-center gap-5 bg-[#17233b] p-5 md:flex-row md:gap-6">
       <section className="w-full max-w-md rounded-2xl bg-[#fffefa] p-8 shadow-2xl sm:p-11">
         <Logo dark />
         <p className="mt-12 text-[10px] font-bold uppercase tracking-[.15em] text-[#e88d35]">
@@ -126,6 +126,26 @@ export function AuthForm({
           </Link>
         </p>
       </section>
+      {mode === "login" && (
+        <aside className="w-full max-w-md rounded-2xl border border-white/10 bg-white/10 p-6 text-white backdrop-blur-sm md:max-w-xs">
+          <p className="text-xs font-bold uppercase tracking-[.15em] text-[#f3b36e]">
+            Demo account
+          </p>
+          <p className="mt-2 text-sm text-slate-200">
+            Use these credentials to explore the workspace.
+          </p>
+          <dl className="mt-5 space-y-3 text-sm">
+            <div>
+              <dt className="text-xs text-slate-300">Email</dt>
+              <dd className="mt-1 font-semibold">admin@gmail.com</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-300">Password</dt>
+              <dd className="mt-1 font-semibold">Admin@123</dd>
+            </div>
+          </dl>
+        </aside>
+      )}
     </main>
   );
 }
