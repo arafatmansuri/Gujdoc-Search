@@ -3,17 +3,36 @@ import { useEffect } from "react";
 import { AskBox } from "../components/AskBox";
 import { DocumentList } from "../components/DocumentList";
 import { ProcessingSummary } from "../components/ProcessingSummary";
-import { fetchDocuments, invalidateDocuments, useAppDispatch, useAppSelector } from "../store";
+import { fetchDocuments, fetchMetrics, invalidateDocuments, invalidateMetrics, syncDocument, useAppDispatch, useAppSelector } from "../store";
 
 export function HomePage() {
   const dispatch = useAppDispatch();
-  const { items: documents, error, invalidated } = useAppSelector((state) => state.documents);
+  const { items: documents, error } = useAppSelector((state) => state.documents);
   useEffect(() => {
     void dispatch(fetchDocuments());
-  }, [dispatch, invalidated]);
+    void dispatch(fetchMetrics());
+  }, [dispatch]);
+  useEffect(() => {
+    const processing = documents.filter((document) => document.status === 'pending' || document.status === 'processing')
+    if (!processing.length) return
+    const timer = window.setInterval(() => {
+      processing.forEach((document) => {
+        void dispatch(syncDocument(document.id)).then((result) => {
+          if (syncDocument.fulfilled.match(result)
+            && (result.payload.status === 'completed' || result.payload.status === 'failed')) {
+            dispatch(invalidateMetrics())
+            void dispatch(fetchMetrics())
+          }
+        })
+      })
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [dispatch, documents])
   const refresh = () => {
     dispatch(invalidateDocuments());
     void dispatch(fetchDocuments());
+    dispatch(invalidateMetrics());
+    void dispatch(fetchMetrics());
   };
   return (
     <div className="space-y-10">

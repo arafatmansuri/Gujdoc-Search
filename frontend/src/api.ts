@@ -72,6 +72,35 @@ client.interceptors.request.use((config) => {
   return config
 })
 
+let refreshRequest: Promise<string> | null = null
+
+client.interceptors.response.use(undefined, async (error) => {
+  const original = error.config as (typeof error.config & { _retry?: boolean }) | undefined
+  if (error.response?.status !== 401 || !original || original._retry
+    || /\/auth\/(login|refresh|register|logout)/.test(original.url ?? '')) {
+    return Promise.reject(error)
+  }
+  const refreshToken = localStorage.getItem('gujdoc_refresh_token')
+  if (!refreshToken) return Promise.reject(error)
+  original._retry = true
+  refreshRequest ??= axios.post(`${client.defaults.baseURL}/auth/refresh`, { refresh_token: refreshToken })
+    .then(({ data }) => {
+      localStorage.setItem('gujdoc_access_token', data.access_token)
+      localStorage.setItem('gujdoc_refresh_token', data.refresh_token)
+      return data.access_token as string
+    })
+    .finally(() => { refreshRequest = null })
+  try {
+    const accessToken = await refreshRequest
+    original.headers.Authorization = `Bearer ${accessToken}`
+    return client.request(original)
+  } catch (refreshError) {
+    localStorage.removeItem('gujdoc_access_token')
+    localStorage.removeItem('gujdoc_refresh_token')
+    return Promise.reject(refreshError)
+  }
+})
+
 export const api = {
   async login(email: string, password: string) {
     const body = new URLSearchParams({ username: email, password })
@@ -121,14 +150,15 @@ export const api = {
     const form = new FormData()
     form.append('file', file)
     const { data } = await client.post('/documents/upload', form)
-    return data as { document_id: number; filename: string; status: DocumentStatus }
+    return data as DocumentRecord & { task_id: string; message: string }
   },
   async deleteDocument(id: number) {
-    await client.delete(`/documents/${id}`)
+    const { data } = await client.delete(`/documents/${id}`)
+    return data as { document_id: number; message: string }
   },
   async retryDocument(id: number) {
     const { data } = await client.post(`/documents/${id}/retry`)
-    return data as { status: string }
+    return data as DocumentRecord & { message: string }
   },
   async getDocument(id: number) {
     const { data } = await client.get(`/documents/${id}`)
@@ -142,7 +172,7 @@ export const api = {
     referenced_documents: string[]
   }) {
     const { data } = await client.patch(`/documents/${id}/metadata`, metadata)
-    return data as { document_id: number; metadata_status: string; message: string }
+    return data as DocumentRecord & { message: string }
   },
   async search(query: string, limit = 8) {
     const { data } = await client.post('/documents/search', { query, limit })

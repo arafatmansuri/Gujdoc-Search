@@ -30,8 +30,8 @@ export function SearchPage() {
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <input aria-label="Reference number" value={filters.document_number} onChange={(event) => setFilters({ ...filters, document_number: event.target.value })} placeholder="Reference number" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
         <input aria-label="Issuing office" value={filters.issuing_office} onChange={(event) => setFilters({ ...filters, issuing_office: event.target.value })} placeholder="Issuing office" className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-        <input aria-label="Date from" type="date" value={filters.date_from} onChange={(event) => setFilters({ ...filters, date_from: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
-        <input aria-label="Date to" type="date" value={filters.date_to} onChange={(event) => setFilters({ ...filters, date_to: event.target.value })} className="rounded-lg border border-slate-200 px-3 py-2 text-sm" />
+        <label className="text-xs text-slate-500">Date from<input aria-label="Date from" type="date" value={filters.date_from} onChange={(event) => setFilters({ ...filters, date_from: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" /></label>
+        <label className="text-xs text-slate-500">Date to<input aria-label="Date to" type="date" value={filters.date_to} onChange={(event) => setFilters({ ...filters, date_to: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm" /></label>
       </div>
       <button disabled={busy} className="mt-4 flex items-center gap-2 rounded-lg bg-[#e88d35] px-4 py-2.5 text-xs font-bold text-white disabled:opacity-50"><SlidersHorizontal size={14} />{busy ? 'Searching…' : 'Search records'}</button>
     </form>

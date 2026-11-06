@@ -12,6 +12,7 @@ def save_document(
     blob_name: str | None,
     user_id: int,
     content_hash: str,
+    page_count: int,
 ) -> int:
     """Create a document record owned by a user."""
 
@@ -23,13 +24,14 @@ def save_document(
                 INSERT INTO documents (
                     filename,
                     blob_name,
+                    page_count,
                     user_id,
                     content_hash
                 )
-                VALUES (%s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING id
                 """,
-                    (filename, blob_name, user_id, content_hash),
+                    (filename, blob_name, page_count, user_id, content_hash),
                 )
             except UniqueViolation as exc:
                 conn.rollback()

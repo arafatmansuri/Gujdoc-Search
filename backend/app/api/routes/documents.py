@@ -115,7 +115,8 @@ async def upload_document(
         )
     try:
         with pymupdf.open(stream=content, filetype="pdf") as pdf:
-            if pdf.page_count == 0:
+            page_count = pdf.page_count
+            if page_count == 0:
                 raise HTTPException(status_code=400, detail="The PDF contains no pages")
     except HTTPException:
         raise
@@ -160,6 +161,7 @@ async def upload_document(
             blob_name=blob_name,
             user_id=current_user["id"],
             content_hash=content_hash,
+            page_count=page_count,
         )
 
         # Queue background processing
@@ -168,10 +170,13 @@ async def upload_document(
             blob_name=blob_name,
         )
 
+        document = get_document(document_id, current_user["id"])
+        if document is None:
+            raise HTTPException(status_code=500, detail="Uploaded document could not be loaded")
+        document.pop("blob_name", None)
+        document.pop("searchable_blob_name", None)
         return {
-            "document_id": document_id,
-            "filename": safe_filename[:255],
-            "status": "pending",
+            **document,
             "task_id": task.id,
             "message": "Document queued for processing",
         }
@@ -352,9 +357,13 @@ def correct_document_metadata(
         )
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    updated = get_document(document_id, current_user["id"])
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    updated.pop("blob_name", None)
+    updated.pop("searchable_blob_name", None)
     return {
-        "document_id": document_id,
-        "metadata_status": "verified",
+        **updated,
         "message": "Metadata correction saved.",
     }
 
@@ -700,10 +709,14 @@ def retry_document_processing(
         document["blob_name"],
     )
 
+    updated = get_document(document_id, current_user["id"])
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    updated.pop("blob_name", None)
+    updated.pop("searchable_blob_name", None)
     return {
+        **updated,
         "message": "Document processing has been queued.",
-        "document_id": document_id,
-        "status": "queued",
     }
 
 

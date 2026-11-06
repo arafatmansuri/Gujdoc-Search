@@ -4,6 +4,9 @@ ALTER TABLE documents
     ADD COLUMN IF NOT EXISTS content_hash CHAR(64);
 
 ALTER TABLE documents
+    ADD COLUMN IF NOT EXISTS page_count INTEGER;
+
+ALTER TABLE documents
     ADD COLUMN IF NOT EXISTS document_number TEXT,
     ADD COLUMN IF NOT EXISTS searchable_blob_name TEXT,
     ADD COLUMN IF NOT EXISTS document_date DATE,

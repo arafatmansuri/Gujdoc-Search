@@ -37,6 +37,7 @@ def initialize_database():
                     id BIGSERIAL PRIMARY KEY,
                     filename TEXT NOT NULL,
                     blob_name TEXT,
+                    page_count INTEGER,
                     status TEXT NOT NULL DEFAULT 'pending',
                     created_at TIMESTAMPTZ
                         DEFAULT CURRENT_TIMESTAMP
@@ -68,6 +69,9 @@ def initialize_database():
                 ADD COLUMN IF NOT EXISTS user_id BIGINT
                 REFERENCES users(id)
                 ON DELETE SET NULL;
+
+                ALTER TABLE documents
+                ADD COLUMN IF NOT EXISTS page_count INTEGER;
 
             """)
 

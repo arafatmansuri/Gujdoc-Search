@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom'
 import type { DocumentRecord } from '../api'
 import { api } from '../api'
 import { StatusBadge } from './StatusBadge'
-import { invalidateDocuments, useAppDispatch } from '../store'
+import { invalidateMetrics, removeDocument, updateDocument, useAppDispatch } from '../store'
 
 const date = (value?: string) => value
   ? new Date(value).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
@@ -45,7 +45,7 @@ function DocumentRow({ doc }: { doc: DocumentRecord }) {
   async function saveMetadata() {
     setSaving(true)
     try {
-      await api.correctMetadata(doc.id, {
+      const updated = await api.correctMetadata(doc.id, {
         ...form,
         document_number: form.document_number || null,
         document_date: form.document_date || null,
@@ -54,7 +54,8 @@ function DocumentRow({ doc }: { doc: DocumentRecord }) {
         referenced_documents: form.referenced_documents.split(',').map((value) => value.trim()).filter(Boolean),
       })
       setEditing(false)
-      dispatch(invalidateDocuments())
+      dispatch(updateDocument(updated))
+      dispatch(invalidateMetrics())
     } finally {
       setSaving(false)
     }
@@ -80,7 +81,8 @@ function DocumentRow({ doc }: { doc: DocumentRecord }) {
     setDeleting(true)
     try {
       await api.deleteDocument(doc.id)
-      dispatch(invalidateDocuments())
+      dispatch(removeDocument(doc.id))
+      dispatch(invalidateMetrics())
     } catch {
       window.alert('Could not delete this document. Please try again.')
     } finally {
@@ -114,7 +116,7 @@ function DocumentRow({ doc }: { doc: DocumentRecord }) {
     await api.correctRegion(region.id, text)
     setRegions((current) => current.map((item) => item.id === region.id ? { ...item, text, confidence: 1 } : item))
     setRegionDrafts((current) => ({ ...current, [region.id]: text }))
-    dispatch(invalidateDocuments())
+    dispatch(invalidateMetrics())
   }
 
   if (editing) {
@@ -147,7 +149,7 @@ function DocumentRow({ doc }: { doc: DocumentRecord }) {
       <StatusBadge status={doc.status} />
       {doc.has_searchable_pdf && <button disabled={downloading} onClick={() => void download()} className="text-slate-400 hover:text-[#e88d35] disabled:opacity-50" title="Download searchable PDF"><Download size={16} /></button>}
       {doc.status === 'completed' && <button onClick={() => setEditing(true)} className="text-slate-400 hover:text-[#e88d35]" title="Review metadata"><Edit3 size={16} /></button>}
-      {doc.status === 'failed' && <button onClick={() => void api.retryDocument(doc.id).then(() => dispatch(invalidateDocuments()))} className="text-slate-400 hover:text-[#e88d35]" title="Retry processing"><RefreshCw size={16} /></button>}
+      {doc.status === 'failed' && <button onClick={() => void api.retryDocument(doc.id).then((updated) => { dispatch(updateDocument(updated)); dispatch(invalidateMetrics()) })} className="text-slate-400 hover:text-[#e88d35]" title="Retry processing"><RefreshCw size={16} /></button>}
       <button disabled={deleting} onClick={() => void deleteDocument()} className="text-slate-400 hover:text-red-600 disabled:opacity-50" title="Delete document" aria-label={`Delete ${doc.filename}`}><Trash2 size={16} /></button>
     </div>
     {showUncertain && <div className="mt-4 border-t border-amber-100 pt-3"><p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-amber-700">Uncertain OCR regions</p>{regions.length ? <div className="grid gap-2">{regions.map((region) => <div key={region.id} className="rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2"><textarea value={regionDrafts[region.id] ?? region.text} onChange={(event) => setRegionDrafts({ ...regionDrafts, [region.id]: event.target.value })} className="w-full resize-none bg-transparent text-sm text-slate-700 outline-none" rows={2} /><div className="mt-1 flex items-center justify-between"><span className="text-[10px] text-amber-700">Page {region.page_number} · {Math.round((region.confidence ?? 0) * 100)}% confidence</span><button onClick={() => void saveRegion(region)} className="flex items-center gap-1 text-[10px] font-bold text-[#d37d2c]"><Save size={12} />Save correction</button></div></div>)}</div> : <p className="text-xs text-slate-500">No uncertain regions were returned.</p>}</div>}

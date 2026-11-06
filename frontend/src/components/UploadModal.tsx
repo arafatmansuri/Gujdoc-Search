@@ -1,8 +1,8 @@
 import { CircleAlert, FileText, LoaderCircle, UploadCloud, X } from 'lucide-react'
 import { useRef, useState } from 'react'
-import { api, getApiError } from '../api'
+import { api, getApiError, type DocumentRecord } from '../api'
 
-export function UploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded: () => void }) {
+export function UploadModal({ onClose, onUploaded }: { onClose: () => void; onUploaded: (document: DocumentRecord) => void }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [selectedFile, setSelectedFile] = useState<File>()
   const [busy, setBusy] = useState(false)
@@ -22,7 +22,7 @@ export function UploadModal({ onClose, onUploaded }: { onClose: () => void; onUp
   async function upload() {
     if (!selectedFile) return
     setBusy(true); setError('')
-    try { await api.upload(selectedFile); onUploaded(); onClose() } catch (err) { setError(getApiError(err, 'Upload failed. Please choose a valid PDF.')) } finally { setBusy(false) }
+    try { const document = await api.upload(selectedFile); onUploaded(document); onClose() } catch (err) { setError(getApiError(err, 'Upload failed. Please choose a valid PDF.')) } finally { setBusy(false) }
   }
   return <div className="fixed inset-0 z-30 grid place-items-center bg-slate-950/40 p-4" onClick={() => !busy && onClose()}>
     <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>

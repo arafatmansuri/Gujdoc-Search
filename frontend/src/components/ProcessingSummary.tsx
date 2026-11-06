@@ -1,15 +1,13 @@
 import { Activity, CheckCircle2, Clock3, TriangleAlert } from 'lucide-react'
-import { useEffect, useState } from 'react'
-import { api } from '../api'
+import { useEffect } from 'react'
+import { fetchMetrics, useAppDispatch, useAppSelector } from '../store'
 
 export function ProcessingSummary() {
-  const [metrics, setMetrics] = useState<Awaited<ReturnType<typeof api.metrics>> | null>(null)
-  const [evaluation, setEvaluation] = useState<Awaited<ReturnType<typeof api.evaluationMetrics>> | null>(null)
+  const dispatch = useAppDispatch()
+  const { data: metrics, evaluation } = useAppSelector((state) => state.metrics)
   useEffect(() => {
-    void Promise.all([api.metrics(), api.evaluationMetrics()])
-      .then(([summary, evaluationSummary]) => { setMetrics(summary); setEvaluation(evaluationSummary) })
-      .catch(() => undefined)
-  }, [])
+    void dispatch(fetchMetrics())
+  }, [dispatch])
   if (!metrics) return null
   return <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
     <Metric icon={<CheckCircle2 size={16} />} label="Completed" value={metrics.completed_documents} />
